@@ -1,0 +1,240 @@
+---
+title: 'HW4 '
+author: "Dayu Tie"
+date: '2024-09-23'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+```{r}
+data=read.csv('Rainfall.csv')
+head(data)
+```
+
+```{r}
+library(data.table)
+library(lubridate)
+
+years <- 1985:2023
+file_root <- "https://www.ndbc.noaa.gov/view_text_file.php?filename=44013h"
+tail <- ".txt.gz&dir=data/historical/stdmet/"
+buoy_data_list <- list()
+
+for (year in years) {
+  
+  if (year == 2000) next  # Skip the year 2000 as per your requirement
+  
+  path <- paste0(file_root, year, tail)
+  skip_lines <- if (year >= 1985 & year <= 2006) 1 else 2
+  
+  header <- scan(path, what = 'character', nlines = 1, quiet = TRUE)
+  second_line <- scan(path, what = 'character', nlines = 1, skip = 1, quiet = TRUE)
+  
+  if (length(second_line) == length(header)) {
+    buoy <- fread(path, header = FALSE, skip = skip_lines)
+  } else {
+    buoy <- fread(path, header = FALSE, skip = 1)
+  }
+  
+  colnames(buoy) <- header
+  
+  
+  if (all(c('YY', 'MM', 'DD', 'hh', 'mm') %in% colnames(buoy))) {
+    buoy[, Date := make_datetime(YY, MM, DD, hh, mm)]
+  }
+  
+  buoy_data_list[[as.character(year)]] <- buoy
+}
+all_buoy_data <- rbindlist(buoy_data_list, fill = TRUE)
+head(all_buoy_data)
+
+```
+
+
+```{r}
+all_buoy_data$YY <- as.character(all_buoy_data$YY)
+all_buoy_data$YYYY <- as.character(all_buoy_data$YYYY)
+all_buoy_data$`#YY` <- as.character(all_buoy_data$`#YY`)
+all_buoy_data$year <- ifelse(!is.na(all_buoy_data$YYYY), all_buoy_data$YYYY,
+                             ifelse(!is.na(all_buoy_data$`#YY`), all_buoy_data$`#YY`, all_buoy_data$YY))
+all_buoy_data$year <- as.numeric(all_buoy_data$year)
+all_buoy_data$year <- ifelse(all_buoy_data$year >= 85 & all_buoy_data$year <= 98, 
+                             all_buoy_data$year + 1900, 
+                             all_buoy_data$year)
+all_buoy_data <- all_buoy_data %>% select(-YY, -YYYY, -`#YY`)
+head(all_buoy_data)
+```
+
+```{r}
+all_buoy_data <- all_buoy_data %>% relocate(year, .before = 1)
+all_buoy_data$PRES <- ifelse(!is.na(all_buoy_data$PRES), all_buoy_data$PRES, all_buoy_data$BAR)
+all_buoy_data$WDIR <- ifelse(!is.na(all_buoy_data$WDIR), all_buoy_data$WDIR, all_buoy_data$WD)
+all_buoy_data <- all_buoy_data %>% select(-BAR, -WD)
+head(all_buoy_data)
+```
+
+```{r}
+library(data.table)
+file_root <- "https://www.ndbc.noaa.gov/view_text_file.php?filename=44013h"
+year <- "2000"
+tail <- ".txt.gz&dir=data/historical/stdmet/"
+path <- paste0(file_root, year, tail)
+buoy_2000 <- fread(path, header = FALSE, skip = 1, fill = TRUE)
+header <- scan(path, what = 'character', nlines = 1, quiet = TRUE)
+if (length(header) != ncol(buoy_2000)) {
+  header <- header[1:ncol(buoy_2000)]
+}
+setnames(buoy_2000, header)
+if (!"TIDE" %in% colnames(buoy_2000)) {
+  buoy_2000[, TIDE := 99] 
+} else {
+  buoy_2000[TIDE == "", TIDE := 99]
+}
+buoy_2000 <- buoy_2000 %>% rename(year = YYYY)
+buoy_2000 <- buoy_2000 %>% 
+  rename(PRES = BAR, WDIR = WD)
+buoy_2000$mm <- NA
+buoy_2000$year <- as.numeric(buoy_2000$year)
+head(buoy_2000)
+
+
+
+```
+
+```{r}
+
+buoy_1985_2023 <- bind_rows(buoy_2000, all_buoy_data)
+buoy_1985_2023 <- buoy_1985_2023 %>% arrange(year)
+buoy_1985_2023$mm[is.na(buoy_1985_2023$mm)] <- 0
+head(buoy_1985_2023)
+
+```
+
+```{r}
+buoy_1985_2023$datetime <- make_datetime(
+  year = buoy_1985_2023$year, 
+  month = buoy_1985_2023$MM, 
+  day = buoy_1985_2023$DD, 
+  hour = buoy_1985_2023$hh, 
+  min = buoy_1985_2023$mm
+)
+```
+
+
+
+##(b)
+
+```{r}
+buoy_1985_2023[buoy_1985_2023 == 999] <- NA
+colSums(is.na(buoy_1985_2023))
+```
+
+##It's not always appropriate to convert missing/null data to NA.If a placeholder value (like 999, -1, or similar) conveys a specific meaning, such as 'data not collected' or 'not applicable,' it’s best to keep it as is. Changing it to NA might result in losing valuable context.NA bascily exist in WDIR and TIDE after 2000 because TIDE is a new factor .
+
+
+```{r}
+library(openxlsx)
+write.xlsx(buoy_1985_2023, "buoy_1985_2023.xlsx")
+```
+
+##(c)
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+
+data <- read_excel("buoy_1985_2023.xlsx")
+data$datetime <- as.Date(data$datetime)
+temperature_data <- data %>% filter(!is.na(WTMP))
+temperature_data$season <- case_when(
+  month(temperature_data$datetime) %in% c(3, 4, 5) ~ "spring",
+  month(temperature_data$datetime) %in% c(6, 7, 8) ~ "summer",
+  month(temperature_data$datetime) %in% c(9, 10, 11) ~ "autumn",
+  TRUE ~ "winter"  # 12, 1, 2
+)
+
+# every season's average temperature
+seasonal_avg_temp <- temperature_data %>%
+  group_by(season, year = year(datetime)) %>%
+  summarise(avg_wtmp = mean(WTMP, na.rm = TRUE)) %>%
+  ungroup()
+
+# add trend line
+ggplot(seasonal_avg_temp, aes(x = year, y = avg_wtmp, color = season)) +
+  geom_line(size = 1) +
+  geom_smooth(method = "lm", aes(group = season), se = FALSE, linetype = "dashed") +
+  labs(title = "1985-2023  water temperature change trend", x = "year", y = "average temperature (°C)") +
+  theme_minimal() +
+  scale_color_manual(values = c("spring" = "green", "summer" = "orange", "autumn" = "brown", "winter" = "blue"))
+
+```
+
+```{r}
+seasonal_avg_temp <- temperature_data %>%
+  group_by(season, year = year(datetime)) %>%
+  summarise(avg_atmp = mean(ATMP, na.rm = TRUE)) %>%
+  ungroup()
+
+# air temperature and trend line
+ggplot(seasonal_avg_temp, aes(x = year, y = avg_atmp, color = season)) +
+  geom_line(size = 1) +
+  geom_smooth(method = "lm", aes(group = season), se = FALSE, linetype = "dashed") +
+  labs(title = "1985-2023 air temperature change trend ", x = "year", y = "average air temperature (°C)") +
+  theme_minimal() +
+  scale_color_manual(values = c("spring" = "green", "summer" = "orange", "autumn" = "brown", "winter" = "blue"))
+```
+```{r}
+correlation_data <- data %>%
+  filter(!is.na(ATMP) & !is.na(WTMP))
+correlation <- cor(correlation_data$ATMP, correlation_data$WTMP)
+correlation
+```
+
+##As global temperatures rise persistently, the heat from the air is directly transferred to water bodies, resulting in an increase in water temperature. This effect is particularly pronounced in coastal regions and still water bodies like lakes.Positive correlation coefficient 0.8880785 indicates a strong correlation between water and air temperatures, which can be used to validate the accuracy of climate models or to assess the extent to which different regions are responding to global warming.
+
+
+##(d)
+```{r}
+
+library(readxl)
+library(ggplot2)
+library(dplyr)
+
+buoy_data <- read_excel("buoy_1985_2023.xlsx")
+rainfall_data <- read.csv("Rainfall.csv")
+
+
+rainfall_data$DATE <- as.POSIXct(rainfall_data$DATE, format="%Y%m%d %H:%M")
+
+rainfall_data$date_only <- as.Date(rainfall_data$DATE)
+buoy_data$datetime <- as.POSIXct(paste(buoy_data$year, buoy_data$MM, buoy_data$DD, buoy_data$hh, sep="-"), format="%Y-%m-%d-%H")
+buoy_data$date_only <- as.Date(buoy_data$datetime)
+
+merged_data <- inner_join(buoy_data, rainfall_data, by = "date_only")
+merged_data
+
+```
+
+
+```{r}
+merged_data$WDIR[(merged_data$WDIR)==0] <- 1
+model <- lm(HPCP ~ log(WDIR), data = merged_data)
+summary(model)
+
+```
+
+
+
+
+
+
+
+
